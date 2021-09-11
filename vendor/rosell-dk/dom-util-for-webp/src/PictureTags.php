@@ -5,21 +5,7 @@ namespace DOMUtilForWebP;
 //use Sunra\PhpSimple\HtmlDomParser;
 /**
  * Class PictureTags - convert an <img> tag to a <picture> tag and add the webp versions of the images
- * Code is based on code from the ShortPixel plugin, which in turn used code from Responsify WP plugin
- *
- * It works like this:
- *
- * 1. Remove existing <picture> tags and their content - replace with tokens in order to reinsert later
- * 2. Process <img> tags.
- *    - The tags are found with regex.
- *    - The attributes are parsed with DOMDocument if it exists, otherwise with the Simple Html Dom library,
- *      which is included inside this library
- * 3. Re-insert the existing <picture> tags
- *
- * This procedure is very gentle and needle-like. No need for a complete parse - so invalid HTML is no big issue
- *
- * PS:
- * https://packagist.org/packages/masterminds/html5
+ * Based this code on code from the ShortPixel plugin, which used code from Responsify WP plugin
  */
 
 use \WebPExpress\AlterHtmlHelper;
@@ -36,10 +22,7 @@ class PictureTags
      */
     public final function __construct()
     {
-      $this->existingPictureTags = [];
     }
-
-    private $existingPictureTags;
 
     public function replaceUrl($url)
     {
@@ -72,47 +55,30 @@ class PictureTags
                 (isset($attributes['data-lazy-' . $attrName]) && strlen($attributes['data-lazy-' . $attrName])) ?
                     trim($attributes['data-lazy-' . $attrName])
                     : (isset($attributes['data-' . $attrName]) && strlen($attributes['data-' . $attrName]) ?
-                        trim($attributes['data-' . $attrName])
-                        : (isset($attributes[$attrName]) && strlen($attributes[$attrName]) ?
-                            trim($attributes[$attrName]) : false)),
+                    trim($attributes['data-' . $attrName])
+                    : (isset($attributes[$attrName]) && strlen($attributes[$attrName]) ?
+                        trim($attributes[$attrName]) : false)),
             'attrName' =>
                 (isset($attributes['data-lazy-' . $attrName]) && strlen($attributes['data-lazy-' . $attrName])) ?
                     'data-lazy-' . $attrName
                     : (isset($attributes['data-' . $attrName]) && strlen($attributes['data-' . $attrName]) ?
-                        'data-' . $attrName
-                        : (isset($attributes[$attrName]) && strlen($attributes[$attrName]) ? $attrName : false))
+                    'data-' . $attrName
+                    : (isset($attributes[$attrName]) && strlen($attributes[$attrName]) ? $attrName : false))
         );
     }
 
     private static function getAttributes($html)
     {
-        if (function_exists("mb_convert_encoding")) {
-            $html = mb_convert_encoding($html, 'HTML-ENTITIES', 'UTF-8');
-        }
-        if (class_exists('\\DOMDocument')) {
-            $dom = new \DOMDocument();
-            @$dom->loadHTML($html);
-            $image = $dom->getElementsByTagName('img')->item(0);
-            $attributes = [];
-            foreach ($image->attributes as $attr) {
-                    $attributes[$attr->nodeName] = $attr->nodeValue;
+        $attributes = [];
+
+        if (preg_match_all('/\s(\w+=(?P<au>\'|").+(?P=au))/iU', $html, $matches)) {
+            foreach ($matches[1] as $val) {
+                $t = explode('=', $val);
+                $attributes[$t[0]] = trim($t[1], '\'"');
             }
-            return $attributes;
-        } else {
-            //$dom = HtmlDomParser::str_get_html($html, false, false, 'UTF-8', false);
-            $dom = str_get_html($html, false, false, 'UTF-8', false);
-            if ($dom !== false) {
-                $elems = $dom->find('img,IMG');
-                foreach ($elems as $index => $elem) {
-                    $attributes = [];
-                    foreach ($elem->getAllAttributes() as $attrName => $attrValue) {
-                        $attributes[strtolower($attrName)] = $attrValue;
-                    }
-                    return $attributes;
-                }
-            }
-            return [];
         }
+
+        return $attributes;
     }
 
     /**
@@ -135,7 +101,7 @@ class PictureTags
     }
 
     /**
-     *  Replace <img> tag with <picture> tag.
+     *  Replace <image> tag with <picture> tag.
      */
     private function replaceCallback($match)
     {
@@ -209,43 +175,82 @@ class PictureTags
         }
     }
 
-    /*
-     *
-     */
-    public function removePictureTagsTemporarily($content)
-    {
-        //print_r($content);
-        $this->existingPictureTags[] = $content[0];
-        return 'PICTURE_TAG_' . (count($this->existingPictureTags) - 1) . '_';
-    }
-
-    /*
-     *
-     */
-    public function insertPictureTagsBack($content)
-    {
-        $numberString = $content[1];
-        $numberInt = intval($numberString);
-        return $this->existingPictureTags[$numberInt];
-    }
-
     /**
+     *  Add source webp tag
+     */
+    private function addSourceCallback($match)
+    {
+        $sourceTag = $match[0];
+        $sourceTag = str_replace('data-addwebp','', $sourceTag);
+
+        $imgAttributes = self::getAttributes($sourceTag);
+
+        $srcInfo = self::lazyGet($imgAttributes, 'src');
+        $srcsetInfo = self::lazyGet($imgAttributes, 'srcset');
+        $sizesInfo = self::lazyGet($imgAttributes, 'sizes');
+        $media = $imgAttributes['media'] ? ' media="'.$imgAttributes['media'].'" ' : '';
+
+        // exclude so if this content is processed again in other filter,
+        // the source is not add again webp source.
+
+        $srcsetWebP = '';
+        if ($srcsetInfo['value']) {
+            $srcsetArr = explode(', ', $srcsetInfo["value"]);
+            $srcsetArrWebP = [];
+            foreach ($srcsetArr as $i => $srcSetEntry) {
+                // $srcSetEntry is ie "http://example.com/image.jpg 520w"
+                $result = preg_split('/\s+/', trim($srcSetEntry));
+                $src = trim($srcSetEntry);
+                $width = null;
+                if ($result && count($result) >= 2) {
+                    list($src, $width) = $result;
+                }
+
+                $webpUrl = $this->replaceUrlOr($src, false);
+                if ($webpUrl !== false) {
+                    $srcsetArrWebP[] = $webpUrl . (isset($width) ? ' ' . $width : '');
+                }
+            }
+            $srcsetWebP = implode(', ', $srcsetArrWebP);
+            if (strlen($srcsetWebP) == 0) {
+                // We have no webps for you, so no reason to create <picture> tag
+                return $sourceTag;
+            }
+            $sizesAttr = ($sizesInfo['value'] ? (' ' . $sizesInfo['attrName'] . '="' . $sizesInfo['value'] . '"') : '');
+            $sourceSrcAttrName = $srcsetInfo['attrName'];
+            if ($sourceSrcAttrName == 'src') {
+                // "src" isn't allowed in <source> tag with <picture> tag as parent.
+                $sourceSrcAttrName = 'srcset';
+            }
+            return
+                '<source ' . $media . $sourceSrcAttrName . '="' . $srcsetWebP . '"' . $sizesAttr . ' type="image/webp">'
+                . $sourceTag;
+
+        } else {
+            $srcWebP = $this->replaceUrlOr($srcInfo['value'], false);
+            if ($srcWebP === false) {
+                // No reason to create <picture> tag
+                return $sourceTag;
+            }
+
+            $sourceSrcAttrName = $srcInfo['attrName'];
+            if ($sourceSrcAttrName == 'src') {
+                // "src" isn't allowed in <source> tag with <picture> tag as parent.
+                $sourceSrcAttrName = 'srcset';
+            }
+
+            return '<source ' . $media . $sourceSrcAttrName . '="' . $srcWebP . '" type="image/webp">' . $sourceTag;
+        }
+    }
+
+    /*
      *
      */
     public function replaceHtml($content)
     {
-        $this->existingPictureTags = [];
-
-        // Tempororily remove existing <picture> tags
-        $content = preg_replace_callback('/<picture[^>]*>.*?<\/picture>/i', array($this, 'removePictureTagsTemporarily'), $content);
-
-        // Replace "<img>" tags
-        $content = preg_replace_callback('/<img[^>]*>/i', array($this, 'replaceCallback'), $content);
-
-        // Re-insert <picture> tags that was removed
-        $content = preg_replace_callback('/PICTURE_TAG_(\d+)_/', array($this, 'insertPictureTagsBack'), $content);
-
-        return $content;
+        // TODO: We should not replace <img> tags that are inside <picture> tags already, now should we?
+        $content = preg_replace_callback('/<source data-addwebp[^>]*>/i', array($this, 'addSourceCallback'), $content);
+        return preg_replace_callback('/<img[^>]*>/i', array($this, 'replaceCallback'), $content);
     }
 
     /* Main replacer function */

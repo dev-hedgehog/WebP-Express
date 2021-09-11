@@ -125,7 +125,8 @@ class AlterHtmlInit
             add_filter( 'acf_the_content', '\\WebPExpress\\AlterHtmlInit::alterHtml', 99999 );
             add_action( 'dynamic_sidebar_before', '\\WebPExpress\\AlterHtmlInit::sidebarBeforeAlterHtml', 0 );
             add_action( 'dynamic_sidebar_after', '\\WebPExpress\\AlterHtmlInit::sidebarAfterAlterHtml', 1000 );
-
+            // for custom wrap
+            add_filter( 'webp_apply', '\\WebPExpress\\AlterHtmlInit::alterHtml', 99999 );
 
             /*
             TODO:
